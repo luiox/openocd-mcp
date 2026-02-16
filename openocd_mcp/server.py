@@ -816,6 +816,10 @@ def _parse_cli_args() -> argparse.Namespace:
     parser.add_argument("--openocd-path")
     parser.add_argument("--gdb-path")
     parser.add_argument("--openocd-scripts")
+    parser.add_argument("-sse", "--sse", action="store_true", help="Run MCP server in SSE/HTTP mode")
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host for SSE mode")
+    parser.add_argument("--port", type=int, default=9000, help="HTTP bind port for SSE mode")
+    parser.add_argument("--path", default="/sse", help="HTTP endpoint path for SSE mode")
     return parser.parse_args()
 
 
@@ -825,5 +829,14 @@ def main() -> None:
     args = _parse_cli_args()
     _global_config, _runtime_config_sources, _runtime_config_file = _resolve_global_config(args)
     _session_manager.set_global_config(_global_config)
+    if args.sse:
+        mcp.run(
+            transport="sse",
+            host=args.host,
+            port=args.port,
+            path=args.path,
+            show_banner=False,
+        )
+        return
 
-    mcp.run()
+    mcp.run(show_banner=False)

@@ -23,6 +23,22 @@ uv run openocd-mcp
 服务会自动读取当前目录 `config.json`（若存在）中的路径配置。
 参数优先级：命令行参数 > 环境变量 > `config.json` > 内置默认值。
 
+### 启动为 SSE/HTTP（给本地其他 AI 客户端）
+
+默认是 `stdio`。
+
+```bash
+uv run openocd-mcp -sse
+```
+
+默认监听：`http://127.0.0.1:9000/sse`
+
+可自定义：
+
+```bash
+uv run openocd-mcp -sse --host 127.0.0.1 --port 9000 --path /sse
+```
+
 也可通过环境变量配置：
 
 - `OPENOCD_PATH`
@@ -32,6 +48,20 @@ uv run openocd-mcp
 ## VS Code MCP 配置
 
 已提供 `.vscode/mcp.json`，使用 `stdio + uv run openocd-mcp` 启动服务。
+
+如需改为 SSE，可使用：
+
+```json
+{
+	"servers": {
+		"openocd-mcp": {
+			"type": "sse",
+			"url": "http://127.0.0.1:9000/sse"
+		}
+	},
+	"inputs": []
+}
+```
 
 ## 工具列表（MVP）
 
