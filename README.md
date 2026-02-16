@@ -14,11 +14,24 @@ uv sync
 uv run openocd-mcp --openocd-path openocd --gdb-path arm-none-eabi-gdb
 ```
 
+如果直接运行：
+
+```bash
+uv run openocd-mcp
+```
+
+服务会自动读取当前目录 `config.json`（若存在）中的路径配置。
+参数优先级：命令行参数 > 环境变量 > `config.json` > 内置默认值。
+
 也可通过环境变量配置：
 
 - `OPENOCD_PATH`
 - `GDB_PATH`
 - `OPENOCD_SCRIPTS`
+
+## VS Code MCP 配置
+
+已提供 `.vscode/mcp.json`，使用 `stdio + uv run openocd-mcp` 启动服务。
 
 ## 工具列表（MVP）
 
@@ -29,6 +42,7 @@ uv run openocd-mcp --openocd-path openocd --gdb-path arm-none-eabi-gdb
 - `debug_stop()`
 - `debug_command(command)`
 - `debug_status()`
+- `get_runtime_config()`
 
 ## 文档
 

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import socket
 import subprocess
 import threading
@@ -88,7 +89,7 @@ class ProjectConfigManager:
 
         try:
             content = Path(launch_path).read_text(encoding="utf-8")
-            parsed = json.loads(content)
+            parsed = self._parse_launch_content(content)
         except json.JSONDecodeError as error:
             raise RuntimeError("Failed to parse launch.json: invalid JSON format.") from error
         except OSError as error:
@@ -144,6 +145,25 @@ class ProjectConfigManager:
         return loaded
 
     @staticmethod
+    def _parse_launch_content(content: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(content)
+            if not isinstance(parsed, dict):
+                raise json.JSONDecodeError("launch.json root must be object", content, 0)
+            return parsed
+        except json.JSONDecodeError:
+            pass
+
+        no_block_comments = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        no_line_comments = re.sub(r"(^|\s)//.*$", r"\1", no_block_comments, flags=re.MULTILINE)
+        no_trailing_commas = re.sub(r",\s*([}\]])", r"\1", no_line_comments)
+
+        parsed = json.loads(no_trailing_commas)
+        if not isinstance(parsed, dict):
+            raise json.JSONDecodeError("launch.json root must be object", no_trailing_commas, 0)
+        return parsed
+
+    @staticmethod
     def _substitute_workspace_vars(text: str, project_dir: str) -> str:
         return text.replace("${workspaceRoot}", project_dir).replace("${workspaceFolder}", project_dir)
 
@@ -161,7 +181,8 @@ class OpenOCDController:
 
     def flash(self, project_dir: str, config_files: list[str], firmware_path: str) -> str:
         command = self._build_base_command(config_files)
-        command.extend(["-c", f'program "{firmware_path}" verify reset exit'])
+        firmware_for_openocd = firmware_path.replace("\\", "/")
+        command.extend(["-c", f'program "{firmware_for_openocd}" verify reset exit'])
 
         try:
             completed = subprocess.run(
@@ -538,6 +559,119 @@ _global_config = GlobalConfig(
     openocd_scripts=os.environ.get("OPENOCD_SCRIPTS", ""),
 )
 _session_manager = DebugSessionManager(_project_manager, _global_config)
+_runtime_config_sources: dict[str, str] = {
+    "openocd_path": "environment/default",
+    "gdb_path": "environment/default",
+    "openocd_scripts": "environment/default",
+}
+_runtime_config_file: str | None = None
+
+
+def _non_empty_string(value: Any) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _load_runtime_config_from_file(config_path: Path) -> dict[str, str]:
+    if not config_path.is_file():
+        return {}
+
+    try:
+        content = config_path.read_text(encoding="utf-8")
+        parsed = json.loads(content)
+    except OSError as error:
+        raise RuntimeError(f"Failed to read config file {config_path}: {error}") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"Failed to parse config file {config_path}: invalid JSON format.") from error
+
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"Config file {config_path} must be a JSON object.")
+
+    openocd_path = _non_empty_string(parsed.get("openocd_path")) or _non_empty_string(parsed.get("openocdPath"))
+    gdb_path = _non_empty_string(parsed.get("gdb_path")) or _non_empty_string(parsed.get("gdbPath"))
+    openocd_scripts = _non_empty_string(parsed.get("openocd_scripts")) or _non_empty_string(parsed.get("openocdScripts"))
+
+    arm_toolchain_path = _non_empty_string(parsed.get("armToolchainPath"))
+    if not gdb_path and arm_toolchain_path:
+        gdb_binary = "arm-none-eabi-gdb.exe" if os.name == "nt" else "arm-none-eabi-gdb"
+        gdb_path = os.path.abspath(os.path.normpath(os.path.join(arm_toolchain_path, gdb_binary)))
+
+    resolved: dict[str, str] = {}
+    if openocd_path:
+        resolved["openocd_path"] = openocd_path
+    if gdb_path:
+        resolved["gdb_path"] = gdb_path
+    if openocd_scripts:
+        resolved["openocd_scripts"] = openocd_scripts
+    return resolved
+
+
+def _resolve_global_config(args: argparse.Namespace) -> tuple[GlobalConfig, dict[str, str], str | None]:
+    local_config_path = Path(os.getcwd()) / "config.json"
+    local_values = _load_runtime_config_from_file(local_config_path)
+
+    openocd_arg = _non_empty_string(args.openocd_path)
+    gdb_arg = _non_empty_string(args.gdb_path)
+    scripts_arg = _non_empty_string(args.openocd_scripts)
+
+    openocd_env = _non_empty_string(os.environ.get("OPENOCD_PATH"))
+    gdb_env = _non_empty_string(os.environ.get("GDB_PATH"))
+    scripts_env = _non_empty_string(os.environ.get("OPENOCD_SCRIPTS"))
+
+    if openocd_arg:
+        openocd_path = openocd_arg
+        openocd_source = "cli"
+    elif openocd_env:
+        openocd_path = openocd_env
+        openocd_source = "env:OPENOCD_PATH"
+    elif "openocd_path" in local_values:
+        openocd_path = local_values["openocd_path"]
+        openocd_source = "config.json"
+    else:
+        openocd_path = "openocd"
+        openocd_source = "default"
+
+    if gdb_arg:
+        gdb_path = gdb_arg
+        gdb_source = "cli"
+    elif gdb_env:
+        gdb_path = gdb_env
+        gdb_source = "env:GDB_PATH"
+    elif "gdb_path" in local_values:
+        gdb_path = local_values["gdb_path"]
+        gdb_source = "config.json"
+    else:
+        gdb_path = "arm-none-eabi-gdb"
+        gdb_source = "default"
+
+    if scripts_arg:
+        openocd_scripts = scripts_arg
+        scripts_source = "cli"
+    elif scripts_env:
+        openocd_scripts = scripts_env
+        scripts_source = "env:OPENOCD_SCRIPTS"
+    elif "openocd_scripts" in local_values:
+        openocd_scripts = local_values["openocd_scripts"]
+        scripts_source = "config.json"
+    else:
+        openocd_scripts = ""
+        scripts_source = "default"
+
+    resolved = GlobalConfig(
+        openocd_path=openocd_path,
+        gdb_path=gdb_path,
+        openocd_scripts=openocd_scripts,
+    )
+    sources = {
+        "openocd_path": openocd_source,
+        "gdb_path": gdb_source,
+        "openocd_scripts": scripts_source,
+    }
+    config_file = str(local_config_path) if local_config_path.is_file() else None
+    return resolved, sources, config_file
 
 
 def _ok_or_error(handler: callable[..., str], *args: Any, **kwargs: Any) -> str:
@@ -547,8 +681,14 @@ def _ok_or_error(handler: callable[..., str], *args: Any, **kwargs: Any) -> str:
         return f"Error: {error}"
 
 
-@mcp.tool()
+@mcp.tool(description="Set current project directory and load debug configurations from .vscode/launch.json.")
 def set_project(project_dir: str) -> str:
+    """Set current project directory and load debug configurations from .vscode/launch.json.
+
+    Args:
+        project_dir: Absolute path to the project root directory.
+    """
+
     def _inner() -> str:
         _session_manager.stop_session()
         normalized_dir, names = _project_manager.set_project(project_dir)
@@ -560,8 +700,10 @@ def set_project(project_dir: str) -> str:
     return _ok_or_error(_inner)
 
 
-@mcp.tool()
+@mcp.tool(description="Reload launch.json from current project and return available debug configurations.")
 def refresh_debug_targets() -> str:
+    """Reload launch.json from current project and return available debug configurations."""
+
     def _inner() -> str:
         names = _project_manager.refresh()
         lines = ["Refreshed debug targets. Available configurations:"]
@@ -571,8 +713,15 @@ def refresh_debug_targets() -> str:
     return _ok_or_error(_inner)
 
 
-@mcp.tool()
+@mcp.tool(description="Flash firmware once using specified launch configuration without starting debug session.")
 def flash_download(config_name: str, firmware_path: str | None = None) -> str:
+    """Flash firmware once using specified launch configuration without starting debug session.
+
+    Args:
+        config_name: Configuration name from launch.json.
+        firmware_path: Optional override for executable firmware path.
+    """
+
     def _inner() -> str:
         resolved_firmware, resolved_config, output = _session_manager.flash_download(config_name, firmware_path)
         lines = [f"Flashing firmware {resolved_firmware} using config '{resolved_config}'...", "OpenOCD output:"]
@@ -583,8 +732,15 @@ def flash_download(config_name: str, firmware_path: str | None = None) -> str:
     return _ok_or_error(_inner)
 
 
-@mcp.tool()
+@mcp.tool(description="Start debug session using specified launch configuration.")
 def debug_start(config_name: str, firmware_path: str | None = None) -> str:
+    """Start debug session using specified launch configuration.
+
+    Args:
+        config_name: Configuration name from launch.json.
+        firmware_path: Optional override for executable firmware path.
+    """
+
     def _inner() -> str:
         session = _session_manager.start_session(config_name, firmware_path)
 
@@ -604,8 +760,10 @@ def debug_start(config_name: str, firmware_path: str | None = None) -> str:
     return _ok_or_error(_inner)
 
 
-@mcp.tool()
+@mcp.tool(description="Stop current active debug session and terminate OpenOCD/GDB processes.")
 def debug_stop() -> str:
+    """Stop current active debug session and terminate OpenOCD/GDB processes."""
+
     def _inner() -> str:
         stopped = _session_manager.stop_session()
         if not stopped:
@@ -615,33 +773,57 @@ def debug_stop() -> str:
     return _ok_or_error(_inner)
 
 
-@mcp.tool()
+@mcp.tool(description="Execute one GDB command in current active debug session.")
 def debug_command(command: str) -> str:
+    """Execute one GDB command in current active debug session.
+
+    Args:
+        command: GDB command text, such as 'next' or 'print x'.
+    """
+
     return _ok_or_error(_session_manager.execute_gdb_command, command)
 
 
-@mcp.tool()
+@mcp.tool(description="Get current debug session status and available configuration names in JSON string format.")
 def debug_status() -> str:
+    """Get current debug session status and available configuration names in JSON string format."""
+
     return _ok_or_error(lambda: json.dumps(_session_manager.status(), ensure_ascii=False, indent=2))
+
+
+@mcp.tool(description="Return currently effective OpenOCD/GDB runtime configuration and value sources for troubleshooting.")
+def get_runtime_config() -> str:
+    """Return currently effective OpenOCD/GDB runtime configuration and value sources for troubleshooting."""
+
+    def _inner() -> str:
+        config_file = Path(_runtime_config_file) if _runtime_config_file else (Path(os.getcwd()) / "config.json")
+        payload = {
+            "openocd_path": _global_config.openocd_path,
+            "gdb_path": _global_config.gdb_path,
+            "openocd_scripts": _global_config.openocd_scripts,
+            "sources": _runtime_config_sources,
+            "cwd": os.getcwd(),
+            "config_file": str(config_file),
+            "config_file_exists": config_file.is_file(),
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    return _ok_or_error(_inner)
 
 
 def _parse_cli_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="openocd-mcp server")
-    parser.add_argument("--openocd-path", default=os.environ.get("OPENOCD_PATH", "openocd"))
-    parser.add_argument("--gdb-path", default=os.environ.get("GDB_PATH", "arm-none-eabi-gdb"))
-    parser.add_argument("--openocd-scripts", default=os.environ.get("OPENOCD_SCRIPTS", ""))
+    parser.add_argument("--openocd-path")
+    parser.add_argument("--gdb-path")
+    parser.add_argument("--openocd-scripts")
     return parser.parse_args()
 
 
 def main() -> None:
-    global _global_config
+    global _global_config, _runtime_config_sources, _runtime_config_file
 
     args = _parse_cli_args()
-    _global_config = GlobalConfig(
-        openocd_path=args.openocd_path,
-        gdb_path=args.gdb_path,
-        openocd_scripts=args.openocd_scripts,
-    )
+    _global_config, _runtime_config_sources, _runtime_config_file = _resolve_global_config(args)
     _session_manager.set_global_config(_global_config)
 
     mcp.run()

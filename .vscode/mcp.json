@@ -1,0 +1,14 @@
+{
+	"servers": {
+		"openocd-mcp": {
+			"type": "stdio",
+			"command": "uv",
+			"args": [
+				"run",
+				"openocd-mcp"
+			],
+			"cwd": "${workspaceFolder}"
+		}
+	},
+	"inputs": []
+}
