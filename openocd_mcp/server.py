@@ -9,6 +9,7 @@ import socket
 import subprocess
 import threading
 import time
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -823,6 +824,26 @@ def _parse_cli_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _normalize_http_path(path_value: str | None) -> str:
+    value = (path_value or "").strip()
+    if not value:
+        return "/sse"
+
+    if "://" in value:
+        parsed = urlparse(value)
+        value = parsed.path or "/sse"
+
+    value = value.replace("\\", "/")
+
+    if not value.startswith("/"):
+        if re.match(r"^[A-Za-z]:/", value):
+            value = "/" + value.rstrip("/").split("/")[-1]
+        else:
+            value = "/" + value
+
+    return value
+
+
 def main() -> None:
     global _global_config, _runtime_config_sources, _runtime_config_file
 
@@ -830,11 +851,12 @@ def main() -> None:
     _global_config, _runtime_config_sources, _runtime_config_file = _resolve_global_config(args)
     _session_manager.set_global_config(_global_config)
     if args.sse:
+        http_path = _normalize_http_path(args.path)
         mcp.run(
             transport="sse",
             host=args.host,
             port=args.port,
-            path=args.path,
+            path=http_path,
             show_banner=False,
         )
         return

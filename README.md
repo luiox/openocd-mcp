@@ -80,5 +80,9 @@ uv run openocd-mcp -sse --host 127.0.0.1 --port 9000 --path /sse
 - 架构设计：`架构设计.md`
 - RTT 特性（非 MVP）：`RTT特性.md`
 
+## License
+
+MIT
+
 
 
