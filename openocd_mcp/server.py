@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import re
+import signal
 import socket
 import subprocess
 import threading
@@ -303,13 +304,21 @@ class GDBController:
 
     def start(self, firmware_path: str, gdb_port: int = GDB_DEFAULT_PORT) -> None:
         try:
+            kwargs: dict[str, Any] = {
+                "stdin": subprocess.PIPE,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.STDOUT,
+                "text": True,
+                "bufsize": 0,
+            }
+            if os.name == "nt":
+                # Windows: create process in its own process group so we can
+                # send Ctrl+Break events to interrupt GDB reliably.
+                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+
             self._process = subprocess.Popen(
                 [self._gdb_path, "--quiet", firmware_path],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=0,
+                **kwargs,
             )
         except OSError as error:
             raise RuntimeError(f"GDB failed to start: {error}") from error
@@ -336,26 +345,169 @@ class GDBController:
         process.stdin.write(command + "\n")
         process.stdin.flush()
 
-        output = self._wait_for_prompt(timeout_seconds=timeout_seconds).strip()
-        return output
+        try:
+            output = self._wait_for_prompt(timeout_seconds=timeout_seconds).strip()
+            return output
+        except RuntimeError:
+            # Command timed out (e.g., continue/step when target runs without
+            # hitting a breakpoint).  DON'T auto-recover — the target keeps
+            # running so the user can call debug_interrupt() explicitly to
+            # pause at any time, or set a breakpoint and try again.
+            return "(target is running — use debug_interrupt() to pause)"
 
     def stop(self) -> None:
         if not self._process:
             return
 
         if self._process.poll() is None:
+            # First try to interrupt the running target to unblock GDB,
+            # then attempt graceful quit. If that fails, force kill.
             try:
+                self._interrupt_and_wait()
                 self.send_command("quit", timeout_seconds=3)
             except Exception:
                 pass
             self._process.terminate()
             try:
-                self._process.wait(timeout=3)
+                self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self._process.kill()
-                self._process.wait(timeout=3)
+                self._process.wait(timeout=5)
 
         self._process = None
+
+    def _interrupt_via_stdin(self) -> bool:
+        """Method 1: Send Ctrl+C (\\x03) to GDB stdin.
+
+        Works on Unix and some GDB builds on Windows.
+        Returns True if the write was successful (does not check if GDB processed it).
+        """
+        if not self._process or self._process.poll() is not None:
+            return False
+        if self._process.stdin is None:
+            return False
+
+        try:
+            self._process.stdin.write("\x03")
+            self._process.stdin.flush()
+            return True
+        except Exception:
+            return False
+
+    def _interrupt_via_os_signal(self) -> bool:
+        """Method 2: Send OS-level interrupt signal to the GDB process.
+
+        On Unix:  os.kill(pid, SIGINT)
+        On Windows: send_signal(CTRL_BREAK_EVENT) — requires CREATE_NEW_PROCESS_GROUP.
+        Returns True if the signal was sent successfully.
+        """
+        if not self._process or self._process.poll() is not None:
+            return False
+
+        try:
+            pid = self._process.pid
+            if os.name == "nt":
+                # Ctrl+Break is more reliably handled by GDB on Windows
+                self._process.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
+            else:
+                os.kill(pid, signal.SIGINT)
+            return True
+        except Exception:
+            return False
+
+    def _interrupt_via_openocd(self) -> bool:
+        """Halt the target directly via OpenOCD's telnet interface (port 4444).
+
+        Primary interrupt method on Windows (\\x03 is unreliable, CTRL_BREAK_EVENT
+        kills GDB).  Bypasses GDB entirely — OpenOCD stops the target at the
+        hardware level, which causes GDB (monitoring the remote protocol) to
+        detect the halt and return to the (gdb) prompt.
+
+        Keeps the connection open briefly after sending 'halt' to give OpenOCD
+        time to process it before the socket closes.
+        """
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(3)
+                sock.connect(("127.0.0.1", 4444))
+                sock.sendall(b"halt\n")
+                # Give OpenOCD time to process the halt command before
+                # closing the connection, avoiding "Bad file descriptor".
+                time.sleep(0.5)
+            return True
+        except Exception:
+            return False
+
+    def _interrupt_and_wait(self) -> str:
+        """Interrupt the running target and wait for (gdb) prompt.
+
+        Attempt order varies by platform:
+          - Windows: \\x03 stdin → OpenOCD telnet halt  (OS signal SKIPPED —
+            CTRL_BREAK_EVENT kills GDB instead of interrupting it)
+          - Unix:    \\x03 stdin → OpenOCD telnet halt → OS signal
+
+        After each attempt, waits for the (gdb) prompt within a short timeout.
+        If all methods fail, raises RuntimeError.
+        """
+        if not self._process or self._process.poll() is not None:
+            return ""
+        if self._process.stdin is None:
+            raise RuntimeError("GDB stdin is unavailable.")
+
+        # --- Quick check: maybe GDB is already at prompt ---
+        self._drain_char_queue()
+        if "(gdb)" in self._pending_output:
+            # Already at prompt — drain and return what we have
+            marker_index = self._pending_output.rfind("(gdb)")
+            output = self._pending_output[:marker_index]
+            self._pending_output = self._pending_output[marker_index + len("(gdb)") :].lstrip(" \r\n")
+            return output.strip()
+
+        # --- Platform-aware attempt list ---
+        # On Windows, \x03 to stdin is unreliable (GDB ignores it) and
+        # CTRL_BREAK_EVENT kills GDB instead of interrupting it, so we rely
+        # on OpenOCD telnet halt (primary) with \x03 as fallback.
+        if os.name == "nt":
+            attempts: list[tuple[str, callable[[], bool], int]] = [
+                ("OpenOCD telnet halt", self._interrupt_via_openocd, 12),
+                ("\\x03 to GDB stdin", self._interrupt_via_stdin, 8),
+            ]
+        else:
+            attempts = [
+                ("\\x03 to GDB stdin", self._interrupt_via_stdin, 8),
+                ("OpenOCD telnet halt", self._interrupt_via_openocd, 8),
+                ("OS signal", self._interrupt_via_os_signal, 8),
+            ]
+
+        last_error: Exception | None = None
+        for label, attempt_fn, timeout in attempts:
+            try:
+                if not attempt_fn():
+                    continue
+            except Exception as exc:
+                last_error = exc
+                continue
+
+            # Wait briefly for (gdb) prompt to appear
+            try:
+                result = self._wait_for_prompt(timeout_seconds=timeout).strip()
+                return result
+            except RuntimeError:
+                # Prompt not found yet — fall through to next method
+                continue
+
+        raise RuntimeError(
+            f"Failed to interrupt target: all methods exhausted."
+        ) from last_error
+
+    def interrupt_target(self) -> str:
+        """Interrupt/pause the running target and return to GDB prompt.
+
+        Tries multiple interrupt methods (stdin \\x03, OS signal, OpenOCD halt).
+        After interruption, normal debug commands (print, break, continue) are available.
+        Safe to call even if the target is already stopped.
+        """
+        return self._interrupt_and_wait()
 
     def _reader_loop(self) -> None:
         if not self._process or not self._process.stdout:
@@ -490,6 +642,16 @@ class DebugSessionManager:
             raise RuntimeError(f"GDB command failed: (gdb) {command}\n{output.strip()}")
 
         return output.strip()
+
+    def interrupt_target(self) -> str:
+        """Interrupt/pause the running target without terminating the debug session."""
+        with self._lock:
+            if not self._current_session:
+                raise RuntimeError("No active debug session. Call debug_start first.")
+            gdb_controller = self._current_session.gdb_controller
+
+        output = gdb_controller.interrupt_target()
+        return output
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -783,6 +945,31 @@ def debug_command(command: str) -> str:
     """
 
     return _ok_or_error(_session_manager.execute_gdb_command, command)
+
+
+@mcp.tool(
+    description=(
+        "Interrupt/pause the running target without terminating the debug session. "
+        "Use this when the target is running (e.g., after 'continue' with no breakpoint hit) "
+        "to regain control of GDB. After interruption you can inspect registers/memory, "
+        "set breakpoints, or continue debugging."
+    )
+)
+def debug_interrupt() -> str:
+    """Interrupt/pause the running target without terminating the debug session.
+
+    Sends Ctrl+C to GDB, which stops the target and returns to the (gdb) prompt.
+    Safe to call even if the target is already stopped.
+    """
+
+    def _inner() -> str:
+        output = _session_manager.interrupt_target()
+        lines = ["Target interrupted."]
+        if output:
+            lines.append(output)
+        return "\n".join(lines)
+
+    return _ok_or_error(_inner)
 
 
 @mcp.tool(description="Get current debug session status and available configuration names in JSON string format.")
