@@ -52,7 +52,7 @@ Parameter priority: CLI args > env vars > `config.json` > built-in defaults.
 - **Session model**: At most **one** active debug session. `debug_start` auto-stops any previous session.
 - **GDB timeout**: Default command timeout is 30s; `load` uses 120s; flash uses 180s.
 - **Run → Inspect → Run loop**: Use `debug_continue()` to resume the target asynchronously — it returns immediately via MI `^running`. Use `debug_interrupt()` to pause the target via MI `-exec-interrupt` at any time. No polling or timeout issues.
-- **Interrupt mechanism (`debug_interrupt`)**: Uses **GDB/MI `-exec-interrupt`** — sends the command via stdin pipe, GDB responds with `^done` and pushes `*stopped` event. Clean, reliable, cross-platform. No signal hacks or telnet fallback needed.
+- **Interrupt mechanism (`debug_interrupt`)**: Uses **GDB/MI `-exec-interrupt`** as primary. On Windows, falls back to **OpenOCD telnet halt** (port 4444) since Windows pipe interrupt is unreliable.
 
 ## RTT (Not Yet Implemented)
 

@@ -3,8 +3,12 @@
 使用 GDB --interpreter=mi2 模式，通过事件驱动方式与 GDB 交互。
 核心优势：
 - 发送 -exec-continue 后立即返回，GDB 持续响应其他命令
-- -exec-interrupt 直接通过 MI 协议完成，无需旁路机制
+- -exec-interrupt 优先通过 MI 协议完成
 - GDB 主动推送 *stopped/*running 事件，无需轮询提示符
+
+平台注意：
+- Unix: MI -exec-interrupt 可靠，直接使用
+- Windows: 管道 -exec-interrupt 可能超时，自动 fallback 到 OpenOCD telnet halt
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from __future__ import annotations
 import os
 import queue
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -447,16 +452,48 @@ class GDBMISession:
         raise RuntimeError(f"Failed to continue: {err}")
 
     def exec_interrupt(self) -> str:
-        """中断目标执行（通过 GDB/MI -exec-interrupt）。"""
+        """中断目标执行。
+
+        平台策略：
+        - Unix: 优先 MI -exec-interrupt
+        - Windows: 优先 OpenOCD telnet halt（管道中断不可靠），MI 为降级
+        """
+        if os.name == "nt":
+            return self._exec_interrupt_windows()
+        return self._exec_interrupt_unix()
+
+    def _exec_interrupt_unix(self) -> str:
+        """Unix 中断：MI → OpenOCD telnet fallback。"""
+        try:
+            return self._exec_interrupt_mi()
+        except RuntimeError:
+            if self._interrupt_via_openocd():
+                self._wait_for_stop_quiet(3)
+                return "Target interrupted (via OpenOCD telnet)."
+            raise
+
+    def _exec_interrupt_windows(self) -> str:
+        """Windows 中断：OpenOCD telnet halt → MI fallback。"""
+        if self._interrupt_via_openocd():
+            self._wait_for_stop_quiet(5)
+            return "Target interrupted (via OpenOCD telnet)."
+        return self._exec_interrupt_mi()
+
+    def _exec_interrupt_mi(self) -> str:
+        """通过 GDB/MI -exec-interrupt 中断。"""
         result = self.send_mi("-exec-interrupt")
         if result.get("class") == "error":
             msg = result.get("results", {}).get("msg", "interrupt failed")
             raise RuntimeError(f"Failed to interrupt target: {msg}")
+        self._wait_for_stop_quiet(3)
+        return "Target interrupted."
+
+    def _wait_for_stop_quiet(self, timeout: float) -> None:
+        """安静地等待目标停止，忽略超时。"""
         try:
-            self.wait_for_stop(timeout=3)
+            self.wait_for_stop(timeout=timeout)
         except RuntimeError:
             pass
-        return "Target interrupted."
 
     def wait_for_stop(self, timeout: float = 10) -> dict:
         """等待目标停止（*stopped 事件），可用于 continue 后等待断点。"""
@@ -549,5 +586,18 @@ class GDBMISession:
         # 这些只是信息性通知，不改变目标状态
         pass
 
-    # (历史遗留清理: _interrupt_via_openocd / _interrupt_raw 已移除)
-    # 所有中断操作统一走 GDB/MI -exec-interrupt
+    # ------------------------------------------------------------------
+    # 中断 fallback（Windows 管道中断不可靠时使用）
+    # ------------------------------------------------------------------
+
+    def _interrupt_via_openocd(self) -> bool:
+        """fallback: 通过 OpenOCD telnet (port 4444) halt 目标。"""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(3)
+                sock.connect(("127.0.0.1", 4444))
+                sock.sendall(b"halt\n")
+                time.sleep(0.5)
+            return True
+        except Exception:
+            return False
