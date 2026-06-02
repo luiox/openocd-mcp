@@ -232,6 +232,15 @@ def read_rtt(max_lines: int = 10) -> str:
     return _ok_or_error(_session_manager.read_rtt, max_lines)
 
 
+@mcp.tool(description="Gracefully shut down the MCP server. Stops debug session if active, then exits.")
+def shutdown() -> str:
+    _session_manager.stop_session()
+    # 延迟退出，确保 MCP 响应先返回给客户端
+    import threading, time
+    threading.Thread(target=lambda: (time.sleep(0.5), os._exit(0)), daemon=False).start()
+    return "Shutting down..."
+
+
 # --- CLI 入口 ---
 
 def _parse_cli_args() -> argparse.Namespace:
