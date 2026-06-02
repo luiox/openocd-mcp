@@ -98,11 +98,11 @@ class OpenOCDController:
         command = [self._config.openocd_path]
         if self._config.openocd_scripts:
             command.extend(["-s", self._config.openocd_scripts])
-        # Apply adapter speed if configured (some CMSIS-DAP probes need lower speed)
-        if self._config.adapter_speed > 0:
-            command.extend(["-c", f"adapter speed {self._config.adapter_speed}"])
         for config_file in config_files:
             command.extend(["-f", config_file])
+        # adapter speed 必须在配置文件之后，否则会被覆盖
+        if self._config.adapter_speed > 0:
+            command.extend(["-c", f"adapter speed {self._config.adapter_speed}"])
         return command
 
     @staticmethod
