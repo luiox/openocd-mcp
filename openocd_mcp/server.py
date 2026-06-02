@@ -25,12 +25,14 @@ _global_config = GlobalConfig(
     openocd_path=os.environ.get("OPENOCD_PATH", "openocd"),
     gdb_path=os.environ.get("GDB_PATH", "arm-none-eabi-gdb"),
     openocd_scripts=os.environ.get("OPENOCD_SCRIPTS", ""),
+    rtt_port=8888,
 )
 _session_manager = DebugSessionManager(_project_manager, _global_config)
 _runtime_config_sources: dict[str, str] = {
     "openocd_path": "environment/default",
     "gdb_path": "environment/default",
     "openocd_scripts": "environment/default",
+    "rtt_port": "default",
 }
 _runtime_config_file: str | None = None
 
@@ -88,8 +90,31 @@ def _resolve_global_config(args: argparse.Namespace) -> tuple[GlobalConfig, dict
     else:
         openocd_scripts = ""; scripts_source = "default"
 
-    resolved = GlobalConfig(openocd_path=openocd_path, gdb_path=gdb_path, openocd_scripts=openocd_scripts)
-    sources = {"openocd_path": openocd_source, "gdb_path": gdb_source, "openocd_scripts": scripts_source}
+    # RTT 端口
+    rtt_port_arg = getattr(args, "rtt_port", None)
+    rtt_port_env = os.environ.get("RTT_PORT")
+    rtt_port_file = local_values.get("rtt_port", 8888)
+    if rtt_port_arg:
+        rtt_port = rtt_port_arg; rtt_port_source = "cli"
+    elif rtt_port_env:
+        rtt_port = int(rtt_port_env); rtt_port_source = "env:RTT_PORT"
+    elif "rtt_port" in local_values:
+        rtt_port = rtt_port_file; rtt_port_source = "config.json"
+    else:
+        rtt_port = 8888; rtt_port_source = "default"
+
+    resolved = GlobalConfig(
+        openocd_path=openocd_path,
+        gdb_path=gdb_path,
+        openocd_scripts=openocd_scripts,
+        rtt_port=int(rtt_port),
+    )
+    sources = {
+        "openocd_path": openocd_source,
+        "gdb_path": gdb_source,
+        "openocd_scripts": scripts_source,
+        "rtt_port": rtt_port_source,
+    }
     config_file = str(local_config_path) if local_config_path.is_file() else None
     return resolved, sources, config_file
 
@@ -135,6 +160,10 @@ def debug_start(config_name: str, firmware_path: str | None = None) -> str:
             f"GDB PID: {session.gdb_session.process.pid}",
             f"Loaded firmware {session.firmware_path}",
         ]
+        if session.rtt_client and session.rtt_client.is_connected:
+            lines.append(f"RTT connected on port {_global_config.rtt_port}")
+        else:
+            lines.append("RTT not available (firmware may not have RTT enabled)")
         config = _project_manager.get_config(session.config_name)
         if config.run_to_entry_point:
             lines.append(f"Running to {config.run_to_entry_point}...")
@@ -164,7 +193,7 @@ def debug_continue() -> str:
     return _ok_or_error(_session_manager.exec_continue)
 
 
-@mcp.tool(description="Interrupt/pause the running target via GDB/MI -exec-interrupt (no telnet fallback needed).")
+@mcp.tool(description="Interrupt/pause the running target via GDB/MI -exec-interrupt with platform-specific fallback.")
 def debug_interrupt() -> str:
     return _ok_or_error(_session_manager.interrupt_target)
 
@@ -189,12 +218,18 @@ def get_runtime_config() -> str:
             "openocd_path": _global_config.openocd_path,
             "gdb_path": _global_config.gdb_path,
             "openocd_scripts": _global_config.openocd_scripts,
+            "rtt_port": _global_config.rtt_port,
             "sources": _runtime_config_sources,
             "cwd": os.getcwd(),
             "config_file": str(cfg_file),
             "config_file_exists": cfg_file.is_file(),
         }, ensure_ascii=False, indent=2)
     return _ok_or_error(_inner)
+
+
+@mcp.tool(description="Read RTT log from the active debug session. Returns up to max_lines of output.")
+def read_rtt(max_lines: int = 10) -> str:
+    return _ok_or_error(_session_manager.read_rtt, max_lines)
 
 
 # --- CLI 入口 ---
@@ -204,6 +239,7 @@ def _parse_cli_args() -> argparse.Namespace:
     parser.add_argument("--openocd-path")
     parser.add_argument("--gdb-path")
     parser.add_argument("--openocd-scripts")
+    parser.add_argument("--rtt-port", type=int, default=8888, help="RTT server port (default: 8888)")
     parser.add_argument("-sse", "--sse", action="store_true", help="Run MCP server in SSE/HTTP mode")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host")
     parser.add_argument("--port", type=int, default=9000, help="HTTP bind port")

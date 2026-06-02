@@ -54,9 +54,15 @@ Parameter priority: CLI args > env vars > `config.json` > built-in defaults.
 - **Run → Inspect → Run loop**: Use `debug_continue()` to resume the target asynchronously — it returns immediately via MI `^running`. Use `debug_interrupt()` to pause the target via MI `-exec-interrupt` at any time. No polling or timeout issues.
 - **Interrupt mechanism (`debug_interrupt`)**: Uses **GDB/MI `-exec-interrupt`** as primary. On Windows, falls back to **OpenOCD telnet halt** (port 4444) since Windows pipe interrupt is unreliable.
 
-## RTT (Not Yet Implemented)
+## RTT (Implemented)
 
-RTT real-time logging is **not in MVP**. Design doc: [`RTT特性.md`](RTT特性.md). Do not expose `read_rtt` or related features until explicitly implemented.
+RTT real-time logging is implemented. Use `read_rtt(max_lines=10)` during an active debug session to read logs from the MCU. RTT is automatically started on `debug_start` if the firmware has SEGGER RTT support compiled in.
+
+- `read_rtt(max_lines)` — Read up to `max_lines` lines of RTT log output
+- RTT status is shown in `debug_start` output and `debug_status` JSON (`rtt_connected`)
+- RTT connection is automatically cleaned up on `debug_stop`
+- Default RTT port: 8888 (configurable via `--rtt-port` CLI arg, `RTT_PORT` env var, or `config.json` `rtt_port` field)
+- RTT is non-fatal: if the firmware doesn't support RTT, the debug session continues without it
 
 ## Detailed Docs
 

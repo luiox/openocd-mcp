@@ -1,6 +1,8 @@
-## RTT 特性设计（非 MVP）
+## RTT 特性设计
 
-本文档收敛 openocd-mcp 中与 RTT（Real-Time Transfer）相关的接口与架构设计。当前 MVP 阶段不实现本特性，后续版本可按本设计启用。
+本文档描述 openocd-mcp 中与 RTT（Real-Time Transfer）相关的接口与架构设计。
+
+当前状态：**已实现**（对应 2026-06-02 版本）。
 
 ---
 

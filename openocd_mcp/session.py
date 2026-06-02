@@ -13,6 +13,7 @@ from typing import Any
 from .config import GlobalConfig, ProjectConfigManager
 from .gdb_mi import GDBMISession
 from .openocd import OpenOCDController
+from .rtt import RTTClient
 
 
 @dataclass
@@ -22,6 +23,7 @@ class DebugSession:
     project_dir: str
     openocd_process: Any  # subprocess.Popen
     gdb_session: GDBMISession
+    rtt_client: RTTClient | None = None
 
 
 class DebugSessionManager:
@@ -79,6 +81,23 @@ class DebugSessionManager:
             OpenOCDController.stop_server(openocd_process)
             raise RuntimeError(str(error)) from error
 
+        # 尝试启动 RTT
+        rtt_client: RTTClient | None = None
+        rtt_port = self._global_config.rtt_port
+        try:
+            gdb_session.send_cli(f"monitor rtt server start {rtt_port} 0", timeout=5)
+            gdb_session.send_cli("monitor rtt start", timeout=5)
+            rtt_client = RTTClient()
+            rtt_client.connect(port=rtt_port)
+        except Exception:
+            # RTT 不可用时不中断调试会话
+            if rtt_client:
+                try:
+                    rtt_client.close()
+                except Exception:
+                    pass
+                rtt_client = None
+
         # 如果需要运行到入口点
         if config.run_to_entry_point:
             try:
@@ -87,6 +106,8 @@ class DebugSessionManager:
             except Exception as error:
                 gdb_session.stop()
                 OpenOCDController.stop_server(openocd_process)
+                if rtt_client:
+                    rtt_client.close()
                 raise RuntimeError(f"Failed to run to entry point: {error}") from error
 
         session = DebugSession(
@@ -95,6 +116,7 @@ class DebugSessionManager:
             project_dir=project_dir,
             openocd_process=openocd_process,
             gdb_session=gdb_session,
+            rtt_client=rtt_client,
         )
 
         with self._lock:
@@ -111,9 +133,16 @@ class DebugSessionManager:
             self._current_session = None
 
         try:
-            session.gdb_session.stop()
+            if session.rtt_client:
+                try:
+                    session.rtt_client.close()
+                except Exception:
+                    pass
         finally:
-            OpenOCDController.stop_server(session.openocd_process)
+            try:
+                session.gdb_session.stop()
+            finally:
+                OpenOCDController.stop_server(session.openocd_process)
         return True
 
     # ------------------------------------------------------------------
@@ -165,6 +194,16 @@ class DebugSessionManager:
         session = self._get_session()
         return session.gdb_session.get_state()
 
+    def read_rtt(self, max_lines: int = 10) -> str:
+        """读取 RTT 日志。"""
+        session = self._get_session()
+        if not session.rtt_client or not session.rtt_client.is_connected:
+            raise RuntimeError("RTT not connected.")
+        lines = session.rtt_client.read_lines(max_lines=max_lines)
+        if not lines:
+            return "(no new RTT output)"
+        return "RTT log:\n" + "\n".join(lines)
+
     # ------------------------------------------------------------------
     # 状态查询
     # ------------------------------------------------------------------
@@ -186,6 +225,7 @@ class DebugSessionManager:
                 "firmware": session.firmware_path,
                 "openocd_pid": session.openocd_process.pid,
                 "gdb_pid": session.gdb_session.process.pid,
+                "rtt_connected": session.rtt_client is not None and session.rtt_client.is_connected,
             })
             # 添加目标状态
             try:

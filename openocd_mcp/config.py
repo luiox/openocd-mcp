@@ -18,6 +18,7 @@ class GlobalConfig:
     openocd_path: str
     gdb_path: str
     openocd_scripts: str
+    rtt_port: int = 8888
 
 
 @dataclass
