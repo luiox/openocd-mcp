@@ -25,7 +25,7 @@ Parameter priority: CLI args > env vars > `config.json` > built-in defaults.
 |---|---|
 | `ProjectConfigManager` | Parses `.vscode/launch.json`, resolves `${workspaceFolder}`, caches configs |
 | `OpenOCDController` | Spawns OpenOCD for flash (`program`) or as GDB server (target remote :3333) |
-| `GDBController` | Pipes GDB stdin/stdout, waits for `(gdb)` prompt |
+| `GDBMISession` | GDB/MI 异步会话，协议解析、事件驱动、无需轮询提示符 |
 | `DebugSessionManager` | Single active session; coordinates OpenOCD + GDB lifecycle |
 
 - All tools return strings. Failures are prefixed with `"Error: "`.
@@ -51,12 +51,8 @@ Parameter priority: CLI args > env vars > `config.json` > built-in defaults.
 - **Project requirement**: Target project must have `.vscode/launch.json` with `configFiles` (OpenOCD scripts) and `executable`/`program` (firmware ELF).
 - **Session model**: At most **one** active debug session. `debug_start` auto-stops any previous session.
 - **GDB timeout**: Default command timeout is 30s; `load` uses 120s; flash uses 180s.
-- **Run → Inspect → Run loop**: Prefer `continue &` (background execution) over `continue` — it returns immediately with the GDB prompt while the target runs in the background. Use `debug_interrupt()` to pause the target at any time. If `continue` (foreground) times out, the session auto-recovers via Ctrl+C interrupt, but `continue &` avoids the 30s wait entirely.
-- **Interrupt mechanism (`debug_interrupt`)**: Uses a **triple-layered approach** to stop the running target:
-  1. Send `\x03` to GDB stdin (standard Ctrl+C via pipe)
-  2. Send OS-level signal (SIGINT on Unix, `CTRL_BREAK_EVENT` on Windows via `CREATE_NEW_PROCESS_GROUP`)
-  3. Halt directly via OpenOCD telnet (`halt` on port 4444)
-  Each method has an 8s timeout; if all fail the error is returned. This ensures maximum cross-platform reliability.
+- **Run → Inspect → Run loop**: Use `debug_continue()` to resume the target asynchronously — it returns immediately via MI `^running`. Use `debug_interrupt()` to pause the target via MI `-exec-interrupt` at any time. No polling or timeout issues.
+- **Interrupt mechanism (`debug_interrupt`)**: Uses **GDB/MI `-exec-interrupt`** — sends the command via stdin pipe, GDB responds with `^done` and pushes `*stopped` event. Clean, reliable, cross-platform. No signal hacks or telnet fallback needed.
 
 ## RTT (Not Yet Implemented)
 
