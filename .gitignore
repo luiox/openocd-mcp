@@ -1,2 +1,5 @@
 /__pycache__
 /openocd_mcp/__pycache__
+
+# Local config (per-project, in project root)
+config.json
