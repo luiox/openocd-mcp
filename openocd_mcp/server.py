@@ -26,6 +26,7 @@ _global_config = GlobalConfig(
     gdb_path=os.environ.get("GDB_PATH", "arm-none-eabi-gdb"),
     openocd_scripts=os.environ.get("OPENOCD_SCRIPTS", ""),
     rtt_port=8888,
+    adapter_speed=0,
 )
 _session_manager = DebugSessionManager(_project_manager, _global_config)
 _runtime_config_sources: dict[str, str] = {
@@ -33,6 +34,7 @@ _runtime_config_sources: dict[str, str] = {
     "gdb_path": "environment/default",
     "openocd_scripts": "environment/default",
     "rtt_port": "default",
+    "adapter_speed": "default",
 }
 _runtime_config_file: str | None = None
 
@@ -103,17 +105,29 @@ def _resolve_global_config(args: argparse.Namespace) -> tuple[GlobalConfig, dict
     else:
         rtt_port = 8888; rtt_port_source = "default"
 
+    # Adapter speed（从 config.json 直接读取）
+    adapter_speed = 0
+    try:
+        if local_config_path.is_file():
+            with open(local_config_path, 'r', encoding='utf-8') as f:
+                raw_cfg = json.load(f)
+            adapter_speed = int(raw_cfg.get("adapter_speed", 0))
+    except Exception:
+        pass
+
     resolved = GlobalConfig(
         openocd_path=openocd_path,
         gdb_path=gdb_path,
         openocd_scripts=openocd_scripts,
         rtt_port=int(rtt_port),
+        adapter_speed=adapter_speed,
     )
     sources = {
         "openocd_path": openocd_source,
         "gdb_path": gdb_source,
         "openocd_scripts": scripts_source,
         "rtt_port": rtt_port_source,
+        "adapter_speed": "config.json" if local_values.get("adapter_speed") else "default",
     }
     config_file = str(local_config_path) if local_config_path.is_file() else None
     return resolved, sources, config_file
@@ -219,6 +233,7 @@ def get_runtime_config() -> str:
             "gdb_path": _global_config.gdb_path,
             "openocd_scripts": _global_config.openocd_scripts,
             "rtt_port": _global_config.rtt_port,
+            "adapter_speed": _global_config.adapter_speed,
             "sources": _runtime_config_sources,
             "cwd": os.getcwd(),
             "config_file": str(cfg_file),

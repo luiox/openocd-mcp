@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -81,12 +82,37 @@ class DebugSessionManager:
             OpenOCDController.stop_server(openocd_process)
             raise RuntimeError(str(error)) from error
 
-        # 尝试启动 RTT
+        # 如果需要运行到入口点
+        if config.run_to_entry_point:
+            try:
+                gdb_session.send_mi(f'-break-insert -t "{config.run_to_entry_point}"')
+                gdb_session.exec_continue()
+            except Exception as error:
+                gdb_session.stop()
+                OpenOCDController.stop_server(openocd_process)
+                raise RuntimeError(f"Failed to run to entry point: {error}") from error
+
+        # 尝试启动 RTT（在入口点断点命中后进行）
+        # 注意：此时 firmware 停在 main 入口，log_init() 尚未执行。
+        # rtt setup 不带签名参数，仅预置地址不阻塞。
+        # 后续 rtt start 开始轮询，等 log_init() 写入 "SEGGER" 签名后自动生效。
         rtt_client: RTTClient | None = None
         rtt_port = self._global_config.rtt_port
         try:
+            # 启动 RTT TCP 服务器
             gdb_session.send_cli(f"monitor rtt server start {rtt_port} 0", timeout=5)
-            gdb_session.send_cli("monitor rtt start", timeout=5)
+
+            # 通过 GDB 查找 _SEGGER_RTT 控制块地址
+            addr_str = gdb_session.send_cli("print &_SEGGER_RTT", timeout=5)
+            m = re.search(r'0x([0-9a-fA-F]+)', addr_str)
+            if m:
+                rtt_addr = m.group(0)
+                # 不带签名参数，仅预置地址，不阻塞
+                gdb_session.send_cli(f'monitor rtt setup {rtt_addr} 1024', timeout=5)
+                gdb_session.send_cli("monitor rtt start", timeout=5)
+            else:
+                raise RuntimeError("Could not resolve _SEGGER_RTT address")
+
             rtt_client = RTTClient()
             rtt_client.connect(port=rtt_port)
         except Exception:
@@ -97,18 +123,6 @@ class DebugSessionManager:
                 except Exception:
                     pass
                 rtt_client = None
-
-        # 如果需要运行到入口点
-        if config.run_to_entry_point:
-            try:
-                gdb_session.send_mi(f'-break-insert -t "{config.run_to_entry_point}"')
-                gdb_session.exec_continue()
-            except Exception as error:
-                gdb_session.stop()
-                OpenOCDController.stop_server(openocd_process)
-                if rtt_client:
-                    rtt_client.close()
-                raise RuntimeError(f"Failed to run to entry point: {error}") from error
 
         session = DebugSession(
             config_name=config_name,
