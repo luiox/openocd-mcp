@@ -160,8 +160,12 @@ class ProjectConfigManager:
         return os.path.abspath(os.path.normpath(os.path.join(base_dir, candidate)))
 
 
-def load_runtime_config_from_file(config_path: Path) -> dict[str, str]:
-    """从 config.json 加载运行时配置（OpenOCD/GDB 路径）。"""
+def load_runtime_config_from_file(config_path: Path) -> dict[str, Any]:
+    """从 config.json 加载运行时配置（OpenOCD/GDB 路径、adapter_speed 等）。
+
+    返回值包含所有识别到的字段，由调用方按需读取。
+    文件丢失或 JSON 解析失败返回空 dict。
+    """
     if not config_path.is_file():
         return {}
 
@@ -174,22 +178,40 @@ def load_runtime_config_from_file(config_path: Path) -> dict[str, str]:
     if not isinstance(parsed, dict):
         return {}
 
-    openocd_path = _non_empty_str(parsed.get("openocd_path")) or _non_empty_str(parsed.get("openocdPath"))
-    gdb_path = _non_empty_str(parsed.get("gdb_path")) or _non_empty_str(parsed.get("gdbPath"))
-    openocd_scripts = _non_empty_str(parsed.get("openocd_scripts")) or _non_empty_str(parsed.get("openocdScripts"))
+    resolved: dict[str, Any] = {}
 
-    arm_toolchain_path = _non_empty_str(parsed.get("armToolchainPath"))
-    if not gdb_path and arm_toolchain_path:
+    for key in ("openocd_path", "openocdPath"):
+        val = parsed.get(key)
+        if isinstance(val, str) and val.strip():
+            resolved["openocd_path"] = val.strip()
+            break
+
+    for key in ("gdb_path", "gdbPath"):
+        val = parsed.get(key)
+        if isinstance(val, str) and val.strip():
+            resolved["gdb_path"] = val.strip()
+            break
+
+    for key in ("openocd_scripts", "openocdScripts"):
+        val = parsed.get(key)
+        if isinstance(val, str) and val.strip():
+            resolved["openocd_scripts"] = val.strip()
+            break
+
+    arm_toolchain_path = parsed.get("armToolchainPath")
+    if "gdb_path" not in resolved and isinstance(arm_toolchain_path, str) and arm_toolchain_path.strip():
         gdb_binary = "arm-none-eabi-gdb.exe" if os.name == "nt" else "arm-none-eabi-gdb"
-        gdb_path = os.path.abspath(os.path.normpath(os.path.join(arm_toolchain_path, gdb_binary)))
+        resolved["gdb_path"] = os.path.abspath(os.path.normpath(os.path.join(arm_toolchain_path.strip(), gdb_binary)))
 
-    resolved: dict[str, str] = {}
-    if openocd_path:
-        resolved["openocd_path"] = openocd_path
-    if gdb_path:
-        resolved["gdb_path"] = gdb_path
-    if openocd_scripts:
-        resolved["openocd_scripts"] = openocd_scripts
+    # 数值配置
+    adapter_speed = parsed.get("adapter_speed")
+    if adapter_speed is not None:
+        resolved["adapter_speed"] = int(adapter_speed)
+
+    rtt_port = parsed.get("rtt_port")
+    if rtt_port is not None:
+        resolved["rtt_port"] = int(rtt_port)
+
     return resolved
 
 

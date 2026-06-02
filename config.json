@@ -1,5 +1,0 @@
-{
-  "openocd_path": "D:/sdk/OpenOCD/bin/openocd.exe",
-  "gdb_path": "D:/sdk/Arm GNU Toolchain arm-none-eabi/11.3 rel1/bin/arm-none-eabi-gdb.exe",
-  "openocd_scripts": ""
-}

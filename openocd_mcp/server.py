@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -105,15 +106,16 @@ def _resolve_global_config(args: argparse.Namespace) -> tuple[GlobalConfig, dict
     else:
         rtt_port = 8888; rtt_port_source = "default"
 
-    # Adapter speed（从 config.json 直接读取）
-    adapter_speed = 0
-    try:
-        if local_config_path.is_file():
-            with open(local_config_path, 'r', encoding='utf-8') as f:
-                raw_cfg = json.load(f)
-            adapter_speed = int(raw_cfg.get("adapter_speed", 0))
-    except Exception:
-        pass
+    # Adapter speed（统一走 local_values）
+    adapter_speed = int(local_values.get("adapter_speed", 0))
+    adapter_source = "config.json" if "adapter_speed" in local_values else "default"
+
+    # 校验 config.json 来源：打印当前读取的文件以辅助排查"读错文件"问题
+    if local_config_path.is_file() and "openocd_path" in local_values:
+        raw_path = local_values["openocd_path"]
+        if not os.path.isfile(raw_path) and raw_path != "openocd":
+            print(f"[openocd-mcp] ⚠  config.json 中的 openocd_path 不存在: {raw_path}", file=sys.stderr)
+            print(f"[openocd-mcp]   读取自: {local_config_path}", file=sys.stderr)
 
     resolved = GlobalConfig(
         openocd_path=openocd_path,
@@ -127,7 +129,7 @@ def _resolve_global_config(args: argparse.Namespace) -> tuple[GlobalConfig, dict
         "gdb_path": gdb_source,
         "openocd_scripts": scripts_source,
         "rtt_port": rtt_port_source,
-        "adapter_speed": "config.json" if local_values.get("adapter_speed") else "default",
+        "adapter_speed": adapter_source,
     }
     config_file = str(local_config_path) if local_config_path.is_file() else None
     return resolved, sources, config_file
