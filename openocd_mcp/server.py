@@ -189,6 +189,37 @@ def debug_start(config_name: str, firmware_path: str | None = None) -> str:
     return _ok_or_error(_inner)
 
 
+@mcp.tool(description="Attach to a running target without resetting or downloading firmware. Uses launch.json config with request='attach'.")
+def debug_attach(config_name: str, firmware_path: str | None = None) -> str:
+    def _inner() -> str:
+        config = _project_manager.get_config(config_name)
+        if config.request != "attach":
+            lines = [
+                f"Config '{config_name}' has request='{config.request}', not 'attach'.",
+                "Continuing anyway in attach mode (no firmware download).",
+            ]
+            msg = "\n".join(lines)
+        else:
+            msg = ""
+
+        session = _session_manager.attach_session(config_name, firmware_path)
+        lines = [
+            msg,
+            f"Attached to target with config '{session.config_name}'",
+            f"OpenOCD PID: {session.openocd_process.pid}",
+            f"GDB PID: {session.gdb_session.process.pid}",
+            f"Symbol file: {session.firmware_path}",
+        ]
+        if session.rtt_client and session.rtt_client.is_connected:
+            lines.append(f"RTT connected on port {_global_config.rtt_port}")
+        else:
+            lines.append("RTT not available (firmware may not have RTT enabled)")
+        lines.append("Target was NOT reset. Original execution continues.")
+        lines.append("Ready for debug commands.")
+        return "\n".join(filter(None, lines))
+    return _ok_or_error(_inner)
+
+
 @mcp.tool(description="Stop current active debug session and terminate OpenOCD/GDB processes.")
 def debug_stop() -> str:
     def _inner() -> str:

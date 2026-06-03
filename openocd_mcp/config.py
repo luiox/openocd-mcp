@@ -28,6 +28,7 @@ class DebugConfig:
     executable: str | None
     config_files: list[str]
     run_to_entry_point: str | None
+    request: str  # "launch" | "attach"
     cwd: str | None
     raw: dict[str, Any]
 
@@ -118,11 +119,15 @@ class ProjectConfigManager:
             run_to_entry = item.get("runToEntryPoint")
             run_to_entry_point = run_to_entry if isinstance(run_to_entry, str) and run_to_entry.strip() else None
 
+            request_raw = item.get("request", "launch")
+            request = request_raw if isinstance(request_raw, str) and request_raw in ("launch", "attach") else "launch"
+
             loaded[name] = DebugConfig(
                 name=name,
                 executable=resolved_executable,
                 config_files=config_files,
                 run_to_entry_point=run_to_entry_point,
+                request=request,
                 cwd=resolved_cwd,
                 raw=item,
             )

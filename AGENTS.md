@@ -31,7 +31,7 @@ Parameter priority: CLI args > env vars > `config.json` > built-in defaults.
 - All tools return strings. Failures are prefixed with `"Error: "`.
 - `launch.json` supports JSON with C-style comments and trailing commas (custom parser in `_parse_launch_content`).
 
-## MCP Tools (MVP)
+## MCP Tools
 
 | Tool | Purpose |
 |---|---|
@@ -39,15 +39,21 @@ Parameter priority: CLI args > env vars > `config.json` > built-in defaults.
 | `refresh_debug_targets()` | Reload launch.json configs |
 | `flash_download(config_name, firmware_path?)` | One-shot flash via OpenOCD `program` |
 | `debug_start(config_name, firmware_path?)` | Start OpenOCD + GDB, load firmware, optionally run to entry point |
+| `debug_attach(config_name, firmware_path?)` | Attach to running target without reset/download (Attach mode) |
 | `debug_stop()` | Kill OpenOCD & GDB |
 | `debug_command(command)` | Send arbitrary GDB command to active session |
+| `debug_continue()` | Continue target execution (async, returns immediately via MI `^running`) |
+| `debug_interrupt()` | Interrupt/pause running target (MI `-exec-interrupt`, Windows fallback to telnet halt) |
+| `debug_state()` | Get target execution state (running/stopped) and last stop reason |
 | `debug_status()` | JSON with session state, PIDs, available configs |
 | `get_runtime_config()` | Show effective OpenOCD/GDB paths and their sources |
+| `read_rtt(max_lines)` | Read RTT log from active debug session |
+| `shutdown()` | Gracefully shut down MCP server |
 
 ## Essential Conventions
 
-- **Config source**: `config.json` in CWD — supports `openocd_path`, `gdb_path`, `openocd_scripts`, `armToolchainPath`.
-- **Env vars**: `OPENOCD_PATH`, `GDB_PATH`, `OPENOCD_SCRIPTS`.
+- **Config source**: `config.json` in CWD — supports `openocd_path`, `gdb_path`, `openocd_scripts`, `armToolchainPath`, `rtt_port`, `adapter_speed`.
+- **Env vars**: `OPENOCD_PATH`, `GDB_PATH`, `OPENOCD_SCRIPTS`, `RTT_PORT`.
 - **Project requirement**: Target project must have `.vscode/launch.json` with `configFiles` (OpenOCD scripts) and `executable`/`program` (firmware ELF).
 - **Session model**: At most **one** active debug session. `debug_start` auto-stops any previous session.
 - **GDB timeout**: Default command timeout is 30s; `load` uses 120s; flash uses 180s.
