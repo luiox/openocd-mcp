@@ -3,3 +3,17 @@
 
 # Local config (per-project, in project root)
 config.json
+
+# IDE
+.vscode/
+.idea/
+
+# Python
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# uv
+.python-version
