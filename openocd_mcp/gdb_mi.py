@@ -356,6 +356,56 @@ class GDBMISession:
 
         self._started.set()
 
+    def attach(self, firmware_path: str, gdb_port: int = GDB_DEFAULT_PORT) -> None:
+        """附加到正在运行的目标: 连接远程 GDB 服务器但不下载固件、不复位。
+
+        与 start() 的区别：
+          - 跳过 -target-download（避免触发目标复位）
+          - 连接后立即 halt 目标，以便进行 RTT 配置等操作
+        """
+        try:
+            kwargs: dict[str, Any] = {
+                "stdin": subprocess.PIPE,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.STDOUT,
+                "text": True,
+                "bufsize": 0,
+            }
+            if os.name == "nt":
+                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+            self._process = subprocess.Popen(
+                [self._gdb_path, "--interpreter=mi2", firmware_path],
+                **kwargs,
+            )
+        except OSError as error:
+            raise RuntimeError(f"GDB failed to start: {error}") from error
+
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader_thread.start()
+
+        # 等待 GDB 准备就绪
+        self.send_mi("-gdb-set pagination off")
+
+        # 连接远程目标（与 start() 相同）
+        result = self.send_mi(f"-target-select remote :{gdb_port}")
+        if result.get("class") == "error":
+            err = result.get("results", {}).get("msg", "connection failed")
+            raise RuntimeError(f"GDB connection failed: {err}")
+
+        # ⚠️ 注意：跳过 -target-download，避免触发目标复位！
+        # 目标保持当前运行状态不变。
+
+        # 暂停目标以便进行后续配置（RTT、断点等）
+        try:
+            self.exec_interrupt()
+            self._wait_for_stop_quiet(5)
+        except Exception:
+            # 中断失败不阻断整体流程，GDB 仍然可以执行符号查询
+            pass
+
+        self._started.set()
+
     def stop(self) -> None:
         """停止 GDB 进程。"""
         if not self._process:
