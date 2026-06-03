@@ -12,6 +12,7 @@ allowed-tools:
   - mcp_openocd-mcp_refresh_debug_targets
   - mcp_openocd-mcp_flash_download
   - mcp_openocd-mcp_debug_start
+  - mcp_openocd-mcp_debug_attach
   - mcp_openocd-mcp_debug_stop
   - mcp_openocd-mcp_debug_continue
   - mcp_openocd-mcp_debug_interrupt
@@ -308,7 +309,7 @@ import sqlite3, json
 ws = sqlite3.connect('C:/Users/xxx/AppData/Roaming/Code/User/workspaceStorage/<workspace_id>/state.vscdb')
 for key in ['mcpToolCache', 'mcp.extCachedServers']:
     ws.execute('DELETE FROM ItemTable WHERE key = ?', (key,))
-tools = ['set_project','refresh_debug_targets','flash_download','debug_start','debug_stop',
+tools = ['set_project','refresh_debug_targets','flash_download','debug_start','debug_attach','debug_stop',
          'debug_command','debug_continue','debug_interrupt','debug_status','debug_state',
          'get_runtime_config','read_rtt','shutdown']
 autoconfirm = {f'mcp_openocd-mcp_{t}': True for t in tools}

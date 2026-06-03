@@ -107,6 +107,7 @@ uv run openocd-mcp -sse --host 127.0.0.1 --port 9000
 |------|------|
 | `flash_download(config_name, firmware_path?)` | 一次性烧录固件（不启动调试会话） |
 | `debug_start(config_name, firmware_path?)` | 启动 OpenOCD + GDB 调试会话，加载固件，可选运行到入口点 |
+| `debug_attach(config_name, firmware_path?)` | 附加到运行中的目标，不下载固件、不复位（Attach 模式） |
 | `debug_stop()` | 终止当前调试会话 |
 | `debug_command(command)` | 执行任意 GDB 命令 |
 | `debug_continue()` | 继续目标执行（异步，立即返回） |
@@ -158,6 +159,7 @@ AI 客户端 → MCP 协议 → openocd-mcp
         {
             "name": "Debug STM32",
             "type": "cortex-debug",
+            "request": "launch",
             "configFiles": [
                 "interface/cmsis-dap.cfg",
                 "target/stm32f1x.cfg"

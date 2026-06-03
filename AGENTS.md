@@ -39,6 +39,7 @@ Parameter priority: CLI args > env vars > `config.json` > built-in defaults.
 | `refresh_debug_targets()` | Reload launch.json configs |
 | `flash_download(config_name, firmware_path?)` | One-shot flash via OpenOCD `program` |
 | `debug_start(config_name, firmware_path?)` | Start OpenOCD + GDB, load firmware, optionally run to entry point |
+| `debug_attach(config_name, firmware_path?)` | Attach to running target without reset/download (Attach mode) |
 | `debug_stop()` | Kill OpenOCD & GDB |
 | `debug_command(command)` | Send arbitrary GDB command to active session |
 | `debug_continue()` | Continue target execution (async, returns immediately via MI `^running`) |
