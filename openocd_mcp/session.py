@@ -150,8 +150,14 @@ class DebugSessionManager:
             OpenOCDController.stop_server(openocd_process)
             raise RuntimeError(str(error)) from error
 
-        # 设置 RTT（attach 已 halt 目标，RTT 配置后恢复运行）
+        # 设置 RTT（在目标运行状态下执行，SWD 内存读无需 halt）
         rtt_client = self._setup_rtt(gdb_session)
+
+        # 确保目标继续运行（_setup_rtt 可能通过 OpenOCD 短暂暂停目标）
+        try:
+            gdb_session.exec_continue()
+        except Exception:
+            pass
 
         session = DebugSession(
             config_name=config_name,

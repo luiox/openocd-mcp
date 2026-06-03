@@ -361,7 +361,8 @@ class GDBMISession:
 
         与 start() 的区别：
           - 跳过 -target-download（避免触发目标复位）
-          - 连接后立即 halt 目标，以便进行 RTT 配置等操作
+          - 不 halt 目标，保持原有运行状态
+          - RTT 等后续配置在运行状态下完成
         """
         try:
             kwargs: dict[str, Any] = {
@@ -394,15 +395,8 @@ class GDBMISession:
             raise RuntimeError(f"GDB connection failed: {err}")
 
         # ⚠️ 注意：跳过 -target-download，避免触发目标复位！
-        # 目标保持当前运行状态不变。
-
-        # 暂停目标以便进行后续配置（RTT、断点等）
-        try:
-            self.exec_interrupt()
-            self._wait_for_stop_quiet(5)
-        except Exception:
-            # 中断失败不阻断整体流程，GDB 仍然可以执行符号查询
-            pass
+        # 目标保持当前运行状态不变，不做 halt。
+        # RTT 配置等操作在目标运行状态下即可完成。
 
         self._started.set()
 
